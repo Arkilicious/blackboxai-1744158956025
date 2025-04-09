@@ -32,6 +32,20 @@ TRACKING_SETTINGS = {
     'DATA_RETENTION_DAYS': 30,
 }
 
+# Celery Configuration
+CELERY_BROKER_URL = 'redis://127.0.0.1:6379/0'
+CELERY_RESULT_BACKEND = 'redis://127.0.0.1:6379/0'
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'UTC'
+CELERY_BEAT_SCHEDULE = {
+    'cleanup_old_tracking_data': {
+        'task': 'tracking.signals.cleanup_old_data',
+        'schedule': 86400,  # Run daily (24 hours in seconds)
+    },
+}
+
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -69,7 +83,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': 'sentinel_db',
         'USER': 'sentinel_admin',
-        'PASSWORD': os.environ.get('DB_PASSWORD'),
+        'PASSWORD': 'password',
         'HOST': 'localhost',
         'PORT': '5432',
     }
