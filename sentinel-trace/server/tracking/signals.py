@@ -1,25 +1,47 @@
-from django.db.models.signals import post_migrate
+from django.db.models.signals import post_save
 from django.dispatch import receiver
+from django.utils import timezone
 from django.conf import settings
-from django.db import transaction
 from .models import TrackingRequest, TrackedEntity
-from datetime import datetime, timedelta
-import logging
+from auditlog.models import LogEntry
 
-logger = logging.getLogger(__name__)
+@receiver(post_save, sender=TrackingRequest)
+def log_tracking_request(sender, instance, created, **kwargs):
+    if created:
+        LogEntry.objects.log_action(
+            user_id=instance.requester.pk,
+            content_type_id=None,
+            object_id=None,
+            object_repr=f"Tracking request created: {instance.warrant_id}",
+            action_flag=1,
+            change_message=f"New tracking request for {instance.entities.count()} entities"
+        )
 
-@receiver(post_migrate)
-def setup_periodic_tasks(sender, **kwargs):
-    """Initialize periodic cleanup tasks after migrations"""
-    if sender.name == 'tracking':
-        from django_celery_beat.models import PeriodicTask, IntervalSchedule
-        try:
-            schedule, _ = IntervalSchedule.objects.get_or_create(
-                every=24 * 60,  # Daily
-                period=IntervalSchedule.MINUTES,
-            )
-            
-            PeriodicTask.objects.update_or_create(
-                name='cleanup_old_tracking_data',
-                defaults={
-                    'interval': schedule,
+from sentinel.celery import app
+
+@app.task(name='tracking.cleanup_old_data')
+def cleanup_old_data():
+    """Clean up tracking data older than retention period"""
+    retention_days = settings.TRACKING_SETTINGS.get('DATA_RETENTION_DAYS', 30)
+    cutoff_date = timezone.now() - timezone.timedelta(days=retention_days)
+    
+    # Delete completed requests older than retention period
+    old_requests = TrackingRequest.objects.filter(
+        status=TrackingRequest.Status.COMPLETED,
+        end_date__lt=cutoff_date
+    )
+    request_count = old_requests.count()
+    old_requests.delete()
+    
+    # Delete orphaned tracked entities
+    orphaned_entities = TrackedEntity.objects.filter(
+        trackingrequest__isnull=True,
+        last_updated__lt=cutoff_date
+    )
+    entity_count = orphaned_entities.count()
+    orphaned_entities.delete()
+    
+    return {
+        'deleted_requests': request_count,
+        'deleted_entities': entity_count
+    }
